@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Block Drop Puzzle</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0;
+    font-family: sans-serif;
+    background: #111;
+    color: #fff;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 100vh;
+    padding: 12px;
+    touch-action: manipulation;
+  }
+  .wrap {
+    width: 100%;
+    max-width: 460px;
+    text-align: center;
+  }
+  h1 {
+    font-size: 22px;
+    margin: 8px 0 12px;
+  }
+  .info {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+  }
+  .panel {
+    flex: 1;
+    min-width: 100px;
+    background: #1c1c1c;
+    padding: 10px;
+    border-radius: 12px;
+  }
+  canvas {
+    width: 100%;
+    max-width: 300px;
+    height: auto;
+    background: #000;
+    border: 3px solid #444;
+    border-radius: 10px;
+    display: block;
+    margin: 0 auto 12px;
+  }
+  .controls {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-top: 10px;
+  }
+  button {
+    border: none;
+    border-radius: 12px;
+    padding: 14px 10px;
+    font-size: 18px;
+    background: #2c2c2c;
+    color: white;
+    font-weight: bold;
+  }
+  button:active {
+    transform: scale(0.98);
+  }
+  .wide {
+    grid-column: span 3;
+  }
+  .row2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .hint {
+    margin-top: 10px;
+    font-size: 13px;
+    color: #bbb;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>🧩 Block Drop Puzzle</h1>
+
+    <div class="info">
+      <div class="panel">Score<br><strong id="score">0</strong></div>
+      <div class="panel">Lines<br><strong id="lines">0</strong></div>
+      <div class="panel">Level<br><strong id="level">1</strong></div>
+    </div>
+
+    <canvas id="game" width="240" height="400"></canvas>
+
+    <div class="controls">
+      <button id="leftBtn">⬅️</button>
+      <button id="rotateBtn">🔄</button>
+      <button id="rightBtn">➡️</button>
+      <button class="wide" id="downBtn">⬇️ Soft Drop</button>
+    </div>
+
+    <div class="row2">
+      <button id="startBtn">▶️ Start</button>
+      <button id="pauseBtn">⏸ Pause</button>
+    </div>
+
+    <div class="hint">
+      スマホ対応：左右移動・回転・落下ができます。<br>
+      キーボード対応：← → ↓ / ↑ or Space で回転
+    </div>
+  </div>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+const COLS = 12;
+const ROWS = 20;
+const BLOCK = 20;
+
+const COLORS = [
+  null,
+  '#4cc9f0',
+  '#f72585',
+  '#b5179e',
+  '#7209b7',
+  '#560bad',
+  '#4895ef',
+  '#f8961e',
+  '#90be6d'
+];
+
+const SHAPES = [
+  [],
+  [[1,1,1,1]],
+  [[2,2],[2,2]],
+  [[0,3,0],[3,3,3]],
+  [[4,4,0],[0,4,4]],
+  [[0,5,5],[5,5,0]],
+  [[6,0,0],[6,6,6]],
+  [[0,0,7],[7,7,7]],
+  [[8]]
+];
+
+function createBoard() {
+  return Array.from({ length: ROWS }, () => Array(COLS).fill(0));
+}
+
+let board = createBoard();
+let score = 0;
+let lines = 0;
+let level = 1;
+let dropCounter = 0;
+let dropInterval = 700;
+let lastTime = 0;
+let running = false;
+let paused = false;
+let gameOver = false;
+let gameOverMessage = '';
+
+const player = {
+  pos: { x: 0, y: 0 },
+  matrix: null
+};
+
+function updateInfo() {
+  document.getElementById('score').textContent = score;
+  document.getElementById('lines').textContent = lines;
+  document.getElementById('level').textContent = level;
+}
+
+function randomPiece() {
+  const id = 1 + Math.floor(Math.random() * (SHAPES.length - 1));
+  return SHAPES[id];
+}
+
+function endGame(message) {
+  running = false;
+  paused = false;
+  gameOver = true;
+  gameOverMessage = message;
+  draw();
+}
+
+function resetPlayer() {
+  player.matrix = randomPiece();
+  player.pos.y = 0;
+  player.pos.x = Math.floor((COLS - player.matrix[0].length) / 2);
+
+  if (collide(board, player)) {
+    endGame('ゲームオーバー');
+  }
+}
+
+function collide(board, player) {
+  const [m, o] = [player.matrix, player.pos];
+  for (let y = 0; y < m.length; y++) {
+    for (let x = 0; x < m[y].length; x++) {
+      if (
+        m[y][x] !== 0 &&
+        (board[y + o.y] && board[y + o.y][x + o.x]) !== 0
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function merge(board, player) {
+  player.matrix.forEach((row, y) => {
+    row.forEach((value, x) => {
+      if (value !== 0) {
+        board[y + player.pos.y][x + player.pos.x] = value;
+      }
+    });
+  });
+}
+
+function sweep() {
+  let cleared = 0;
+
+  outer:
+  for (let y = board.length - 1; y >= 0; y--) {
+    for (let x = 0; x < COLS; x++) {
+      if (board[y][x] === 0) continue outer;
+    }
+    const row = board.splice(y, 1)[0].fill(0);
+    board.unshift(row);
+    y++;
+    cleared++;
+  }
+
+  if (cleared === 4) {
+    lines += cleared;
+    updateInfo();
+    endGame('実はこのテトリｓは、４つ連続消してはいけないんです。game over');
+    return;
+  }
+
+  if (cleared > 0) {
+    lines += cleared;
+    score += [0, 100, 300, 500, 800][cleared] * level;
+    level = 1 + Math.floor(lines / 10);
+    dropInterval = Math.max(120, 700 - (level - 1) * 60);
+    updateInfo();
+  }
+}
+
+function rotate(matrix) {
+  return matrix[0].map((_, i) => matrix.map(row => row[i]).reverse());
+}
+
+function playerRotate() {
+  if (!running || paused || gameOver) return;
+
+  const old = player.matrix;
+  const rotated = rotate(player.matrix);
+  const oldX = player.pos.x;
+  let offset = 1;
+  player.matrix = rotated;
+
+  while (collide(board, player)) {
+    player.pos.x += offset;
+    offset = -(offset + (offset > 0 ? 1 : -1));
+    if (Math.abs(offset) > player.matrix[0].length) {
+      player.matrix = old;
+      player.pos.x = oldX;
+      return;
+    }
+  }
+}
+
+function playerMove(dir) {
+  if (!running || paused || gameOver) return;
+  player.pos.x += dir;
+  if (collide(board, player)) player.pos.x -= dir;
+}
+
+function playerDrop() {
+  if (!running || paused || gameOver) return;
+
+  player.pos.y++;
+  if (collide(board, player)) {
+    player.pos.y--;
+    merge(board, player);
+    sweep();
+
+    if (!gameOver) {
+      resetPlayer();
+    }
+  }
+  dropCounter = 0;
+}
+
+function drawMatrix(matrix, offset) {
+  matrix.forEach((row, y) => {
+    row.forEach((value, x) => {
+      if (value !== 0) {
+        ctx.fillStyle = COLORS[value];
+        ctx.fillRect((x + offset.x) * BLOCK, (y + offset.y) * BLOCK, BLOCK, BLOCK);
+        ctx.strokeStyle = '#111';
+        ctx.strokeRect((x + offset.x) * BLOCK, (y + offset.y) * BLOCK, BLOCK, BLOCK);
+      }
+    });
+  });
+}
+
+function drawGrid() {
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  for (let x = 0; x <= COLS; x++) {
+    ctx.beginPath();
+    ctx.moveTo(x * BLOCK, 0);
+    ctx.lineTo(x * BLOCK, ROWS * BLOCK);
+    ctx.stroke();
+  }
+  for (let y = 0; y <= ROWS; y++) {
+    ctx.beginPath();
+    ctx.moveTo(0, y * BLOCK);
+    ctx.lineTo(COLS * BLOCK, y * BLOCK);
+    ctx.stroke();
+  }
+}
+
+function drawOverlay(message) {
+  ctx.fillStyle = 'rgba(0,0,0,0.82)';
+  ctx.fillRect(10, 120, canvas.width - 20, 160);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 16px sans-serif';
+  ctx.textAlign = 'center';
+
+  const lines = wrapText(message, canvas.width - 40);
+  const startY = 170 - ((lines.length - 1) * 14);
+
+  lines.forEach((line, i) => {
+    ctx.fillText(line, canvas.width / 2, startY + i * 28);
+  });
+
+  ctx.font = '12px sans-serif';
+  ctx.fillStyle = '#ccc';
+  ctx.fillText('Start を押すと最初からやり直せます', canvas.width / 2, 255);
+}
+
+function wrapText(text, maxWidth) {
+  const chars = text.split('');
+  let lines = [];
+  let current = '';
+
+  for (const ch of chars) {
+    const test = current + ch;
+    if (ctx.measureText(test).width > maxWidth && current !== '') {
+      lines.push(current);
+      current = ch;
+    } else {
+      current = test;
+    }
+  }
+
+  if (current) lines.push(current);
+  return lines;
+}
+
+function draw() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  drawGrid();
+  drawMatrix(board, { x: 0, y: 0 });
+  if (player.matrix && !gameOver) {
+    drawMatrix(player.matrix, player.pos);
+  }
+
+  if (paused && running) {
+    drawOverlay('Pause');
+  }
+
+  if (gameOver) {
+    drawOverlay(gameOverMessage);
+  }
+}
+
+function update(time = 0) {
+  if (!running || paused || gameOver) {
+    draw();
+    return;
+  }
+
+  const delta = time - lastTime;
+  lastTime = time;
+  dropCounter += delta;
+
+  if (dropCounter > dropInterval) {
+    playerDrop();
+  }
+
+  draw();
+  requestAnimationFrame(update);
+}
+
+function startGame() {
+  board = createBoard();
+  score = 0;
+  lines = 0;
+  level = 1;
+  dropInterval = 700;
+  dropCounter = 0;
+  lastTime = 0;
+  running = true;
+  paused = false;
+  gameOver = false;
+  gameOverMessage = '';
+  updateInfo();
+  resetPlayer();
+  draw();
+  requestAnimationFrame(update);
+}
+
+function pauseGame() {
+  if (!running || gameOver) return;
+  paused = !paused;
+  if (!paused) {
+    lastTime = performance.now();
+    requestAnimationFrame(update);
+  } else {
+    draw();
+  }
+}
+
+document.getElementById('startBtn').addEventListener('click', startGame);
+document.getElementById('pauseBtn').addEventListener('click', pauseGame);
+document.getElementById('leftBtn').addEventListener('click', () => playerMove(-1));
+document.getElementById('rightBtn').addEventListener('click', () => playerMove(1));
+document.getElementById('rotateBtn').addEventListener('click', playerRotate);
+document.getElementById('downBtn').addEventListener('click', playerDrop);
+
+document.addEventListener('keydown', e => {
+  if (!running || gameOver) return;
+  if (e.key === 'ArrowLeft') playerMove(-1);
+  else if (e.key === 'ArrowRight') playerMove(1);
+  else if (e.key === 'ArrowDown') playerDrop();
+  else if (e.key === 'ArrowUp' || e.key === ' ') playerRotate();
+});
+
+let touchStartX = 0;
+let touchStartY = 0;
+
+canvas.addEventListener('touchstart', e => {
+  const t = e.touches[0];
+  touchStartX = t.clientX;
+  touchStartY = t.clientY;
+}, { passive: true });
+
+canvas.addEventListener('touchend', e => {
+  if (!running || paused || gameOver) return;
+
+  const t = e.changedTouches[0];
+  const dx = t.clientX - touchStartX;
+  const dy = t.clientY - touchStartY;
+
+  if (Math.abs(dx) > Math.abs(dy)) {
+    if (dx > 20) playerMove(1);
+    else if (dx < -20) playerMove(-1);
+  } else {
+    if (dy > 20) playerDrop();
+    else if (dy < -20) playerRotate();
+  }
+}, { passive: true });
+
+updateInfo();
+draw();
+</script>
+</body>
+</html>
